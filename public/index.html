@@ -2,24 +2,79 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sesame Voice Chat</title>
   <style>
-    body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-    #log { white-space: pre-wrap; background: #f0f0f0; padding: 10px; height: 200px; overflow-y: auto; font-family: monospace; }
-    button { padding: 8px 16px; margin: 5px; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; }
-    button:disabled { background: #ccc; }
-    #status { margin: 10px 0; padding: 5px; border-radius: 3px; }
+    body { 
+      font-family: sans-serif; 
+      max-width: 800px; 
+      margin: 0 auto; 
+      padding: 20px;
+    }
+    #log { 
+      white-space: pre-wrap; 
+      background: #f0f0f0; 
+      padding: 10px; 
+      height: 200px; 
+      overflow-y: auto; 
+      font-family: monospace;
+      border-radius: 4px;
+      margin-top: 20px;
+    }
+    button { 
+      padding: 8px 16px; 
+      margin: 5px; 
+      background: #4a90e2; 
+      color: white; 
+      border: none; 
+      border-radius: 4px; 
+      cursor: pointer;
+      font-size: 16px;
+    }
+    button:disabled { 
+      background: #ccc; 
+    }
+    #status { 
+      margin: 10px 0; 
+      padding: 8px; 
+      border-radius: 4px;
+      font-weight: bold;
+    }
+    #characterSelect {
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #ddd;
+      font-size: 16px;
+    }
     .connected    { background: #d4edda; color: #155724; }
     .disconnected { background: #f8d7da; color: #721c24; }
     .connecting   { background: #fff3cd; color: #856404; }
     .fetching     { background: #cce5ff; color: #004085; }
+    .controls {
+      display: flex;
+      align-items: center;
+      margin: 20px 0;
+    }
+    @media (max-width: 600px) {
+      body {
+        padding: 10px;
+      }
+      .controls {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      button, #characterSelect {
+        margin: 5px 0;
+        width: 100%;
+      }
+    }
   </style>
 </head>
 <body>
   <h1>Sesame Voice Chat</h1>
   <div id="status" class="disconnected">Disconnected</div>
 
-  <div>
+  <div class="controls">
     <select id="characterSelect">
       <option value="Maya">Maya</option>
       <option value="Miles">Miles</option>
@@ -50,12 +105,10 @@
   const charSel  = document.getElementById('characterSelect');
 
   function log(msg) {
-    // Only log critical messages
-    if (msg.includes('Error:') || msg.includes('Connected to')) {
-      const t = new Date().toLocaleTimeString();
-      logEl.textContent += `[${t}] ${msg}\n`;
-      logEl.scrollTop = logEl.scrollHeight;
-    }
+    // Log all messages in debug mode
+    const t = new Date().toLocaleTimeString();
+    logEl.textContent += `[${t}] ${msg}\n`;
+    logEl.scrollTop = logEl.scrollHeight;
   }
 
   function updateStatus(state) {
@@ -80,17 +133,22 @@
 
   async function playAudio(buffer) {
     if (!audioContext) return;
-    const int16 = new Int16Array(buffer);
-    const float32 = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i++) {
-      float32[i] = int16[i] / 32768;
+    try {
+      const int16 = new Int16Array(buffer);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768;
+      }
+      const audioBuf = audioContext.createBuffer(1, float32.length, serverSampleRate);
+      audioBuf.getChannelData(0).set(float32);
+      const src = audioContext.createBufferSource();
+      src.buffer = audioBuf;
+      src.connect(audioContext.destination);
+      return new Promise(res => { src.onended = res; src.start(); });
+    } catch (e) {
+      console.error('Audio processing error:', e);
+      return Promise.resolve(); // Continue even if there's an error
     }
-    const audioBuf = audioContext.createBuffer(1, float32.length, serverSampleRate);
-    audioBuf.getChannelData(0).set(float32);
-    const src = audioContext.createBufferSource();
-    src.buffer = audioBuf;
-    src.connect(audioContext.destination);
-    return new Promise(res => { src.onended = res; src.start(); });
   }
 
   function processQueue() {
@@ -109,6 +167,13 @@
   }
 
   function startMic() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      log('Error: getUserMedia not supported in this browser');
+      updateStatus('disconnected');
+      stopSession();
+      return;
+    }
+
     navigator.mediaDevices.getUserMedia({ 
       audio: {
         echoCancellation: true,
@@ -133,7 +198,7 @@
       gainNode.connect(audioContext.destination);
       
       proc.onaudioprocess = ev => {
-        if (ws.readyState !== WebSocket.OPEN || !callId) return;
+        if (!ws || ws.readyState !== WebSocket.OPEN || !callId) return;
         const inF32 = ev.inputBuffer.getChannelData(0);
         const pcm = new Int16Array(inF32.length);
         
@@ -144,121 +209,179 @@
         }
         
         const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
-        ws.send(JSON.stringify({
-          type: 'audio',
-          session_id: sessionId,
-          call_id: callId,
-          content: { audio_data: b64 }
-        }));
+        try {
+          ws.send(JSON.stringify({
+            type: 'audio',
+            session_id: sessionId,
+            call_id: callId,
+            content: { audio_data: b64 }
+          }));
+        } catch (e) {
+          console.error('WebSocket send error:', e);
+        }
       };
     })
     .catch(e => {
-      console.error('Mic error:', e);
-      ws.close();
+      log(`Error accessing microphone: ${e.message || e}`);
+      updateStatus('disconnected');
+      stopSession();
     });
   }
 
   function connect(wsUrl, character) {
     updateStatus('connecting');
-    log(`→ WS connect: ${wsUrl.split('?')[0]}?[token omitted]`);
-    ws = new WebSocket(wsUrl);
+    log(`→ Connecting to WebSocket...`);
+    
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch (e) {
+      log(`× WS Connection Error: ${e.message || e}`);
+      updateStatus('disconnected');
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      return;
+    }
 
     ws.onopen = () => {
-      audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      audioContext.resume().catch(e => {
-        log(`AC resume err: ${e.message}`);
-      });
-      updateStatus('connected');
-      log('→ WS OPEN');
+      try {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        audioContext.resume().catch(e => {
+          log(`Audio Context resume error: ${e.message}`);
+        });
+        updateStatus('connected');
+        log('→ WebSocket connected');
+      } catch (e) {
+        log(`× Audio Context Error: ${e.message || e}`);
+        ws.close();
+      }
     };
 
     ws.onmessage = ev => {
-      if (typeof ev.data === 'string') {
-        const msg = JSON.parse(ev.data);
-        
-        if (msg.type === 'initialize') {
-          sessionId = msg.content?.session_id || msg.session_id;
+      try {
+        if (typeof ev.data === 'string') {
+          const msg = JSON.parse(ev.data);
+          
+          if (msg.type === 'initialize') {
+            sessionId = msg.content?.session_id || msg.session_id;
+            log(`→ Session initialized: ${sessionId.substring(0, 8)}...`);
 
-          ws.send(JSON.stringify({
-            type: 'client_location_state',
-            session_id: sessionId,
-            call_id: null,
-            content: { latitude:0, longitude:0, address:'', timezone:TIMEZONE }
-          }));
+            ws.send(JSON.stringify({
+              type: 'client_location_state',
+              session_id: sessionId,
+              call_id: null,
+              content: { latitude:0, longitude:0, address:'', timezone:TIMEZONE }
+            }));
 
-          ws.send(JSON.stringify({
-            type: 'call_connect',
-            session_id: sessionId,
-            call_id: null,
-            request_id: genRequestId(),
-            content: {
-              sample_rate: SAMPLE_RATE,
-              audio_codec: AUDIO_CODEC,
-              reconnect: false,
-              is_private: false,
-              client_name: CLIENT_NAME,
-              settings: { preset: character },
-              client_metadata: { 
-                language: 'en-US', 
-                user_agent: navigator.userAgent, 
-                mobile_browser: false,
-                media_devices: [] 
+            ws.send(JSON.stringify({
+              type: 'call_connect',
+              session_id: sessionId,
+              call_id: null,
+              request_id: genRequestId(),
+              content: {
+                sample_rate: SAMPLE_RATE,
+                audio_codec: AUDIO_CODEC,
+                reconnect: false,
+                is_private: false,
+                client_name: CLIENT_NAME,
+                settings: { preset: character },
+                client_metadata: { 
+                  language: 'en-US', 
+                  user_agent: navigator.userAgent, 
+                  mobile_browser: /Mobi|Android/i.test(navigator.userAgent), 
+                  media_devices: [] 
+                }
+              }
+            }));
+          }
+          else if (msg.type === 'call_connect_response' || (msg.type === 'chat' && msg.call_id)) {
+            callId = msg.call_id;
+            if (msg.content && msg.content.sample_rate) {
+              serverSampleRate = msg.content.sample_rate;
+            }
+            log(`→ Call connected: ${callId.substring(0, 8)}...`);
+            startMic();
+          }
+          else if (msg.type === 'audio') {
+            const b64 = msg.content?.audio_data;
+            if (b64) {
+              const buf = base64ToArrayBuffer(b64);
+              // Handle audio data immediately
+              audioQueue.push(buf);
+              // Start processing immediately if not already playing
+              if (!isPlaying) {
+                requestAnimationFrame(processQueue);
               }
             }
-          }));
-        }
-        else if (msg.type === 'call_connect_response' || (msg.type === 'chat' && msg.call_id)) {
-          callId = msg.call_id;
-          if (msg.content && msg.content.sample_rate) {
-            serverSampleRate = msg.content.sample_rate;
           }
-          startMic();
-        }
-        else if (msg.type === 'audio') {
-          const b64 = msg.content?.audio_data;
-          if (b64) {
-            const buf = base64ToArrayBuffer(b64);
-            // Handle audio data immediately
-            audioQueue.push(buf);
-            // Start processing immediately if not already playing
-            if (!isPlaying) {
-              requestAnimationFrame(processQueue);
-            }
+          else if (msg.type === 'error') {
+            log(`× Service error: ${msg.content?.error || 'Unknown error'}`);
           }
         }
+      } catch (e) {
+        log(`× Message processing error: ${e.message || e}`);
       }
     };
 
     ws.onclose = () => {
       updateStatus('disconnected');
-      log('× WS CLOSED');
-      mediaStream?.getTracks().forEach(t => t.stop());
+      log('× WebSocket closed');
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(t => t.stop());
+        mediaStream = null;
+      }
       startBtn.disabled = false;
       stopBtn.disabled = true;
     };
 
     ws.onerror = e => {
-      log(`× WS ERROR: ${e.message||e}`);
+      log(`× WebSocket error: ${e.message || 'Unknown error'}`);
     };
   }
 
   async function startSession() {
+    // Clear previous log
+    logEl.textContent = '';
+    log('Starting session...');
+    
     startBtn.disabled = true;
     stopBtn.disabled = false;
     updateStatus('fetching');
 
     const char = charSel.value;
-    const res = await fetch(`/capture-websocket/${char.toLowerCase()}`);
-    const j = await res.json();
-    if (!j.success) {
-      log(`Error: ${j.error}`);
+    try {
+      const res = await fetch(`/capture-websocket/${char.toLowerCase()}`);
+      
+      if (!res.ok) {
+        const text = await res.text();
+        log(`× Server error: ${res.status} ${text}`);
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        updateStatus('disconnected');
+        return;
+      }
+      
+      const j = await res.json();
+      if (!j.success) {
+        log(`× Error: ${j.error}`);
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        updateStatus('disconnected');
+        return;
+      }
+      
+      log(`→ Received WebSocket URL for ${j.character}`);
+      connect(j.websocketUrl, char);
+    } catch (e) {
+      log(`× Fetch error: ${e.message || e}`);
       startBtn.disabled = false;
-      return;
+      stopBtn.disabled = true;
+      updateStatus('disconnected');
     }
-    connect(j.websocketUrl, char);
   }
 
   function stopSession() {
+    log('Stopping session...');
+    
     // Immediately stop all audio elements
     audioQueue = [];
     isPlaying = false;
@@ -266,15 +389,23 @@
     // First stop audio capture
     if (mediaStream) {
       mediaStream.getTracks().forEach(t => {
-        t.stop();
-        t.enabled = false;
+        try {
+          t.stop();
+          t.enabled = false;
+        } catch (e) {
+          console.error('Track stop error:', e);
+        }
       });
       mediaStream = null;
     }
     
     // Close the audio context to completely stop audio processing
     if (audioContext) {
-      audioContext.close().catch(() => {});
+      try {
+        audioContext.close();
+      } catch (e) {
+        console.error('Audio context close error:', e);
+      }
       audioContext = null;
     }
     
@@ -319,9 +450,28 @@
     updateStatus('disconnected');
   }
 
+  // Check browser compatibility
+  window.addEventListener('load', () => {
+    if (!window.WebSocket) {
+      log('Error: WebSockets not supported in this browser');
+      startBtn.disabled = true;
+    }
+    
+    if (!window.AudioContext && !window.webkitAudioContext) {
+      log('Error: Web Audio API not supported in this browser');
+      startBtn.disabled = true;
+    }
+    
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      log('Error: getUserMedia not supported in this browser');
+      startBtn.disabled = true;
+    }
+  });
+
   startBtn.onclick = startSession;
   stopBtn.onclick = stopSession;
   updateStatus('disconnected');
   </script>
+
 </body>
 </html>
