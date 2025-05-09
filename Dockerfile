@@ -1,31 +1,29 @@
-# Use Node.js 18 as base image
+# Use Node.js 18 as base image for building
 FROM node:18-alpine AS builder
 
 WORKDIR /app
 
-# Copy package files first (for better caching)
+# Copy package manifests and install all deps (needed to build + production)
 COPY package*.json ./
-
-# Install dev+prod deps so you can compile
 RUN npm install
 
-# Copy source files and static assets
+# Copy your source and static assets
 COPY tsconfig.json ./
 COPY src ./src
-COPY public ./public             # ← include your static assets
+COPY public ./public
 
-# Build TypeScript code
+# Build the TypeScript
 RUN npm run build
 
-# Start fresh for the runtime image
+# ------ runtime image ------
 FROM node:18-alpine
 
 WORKDIR /app
 
-# Copy built JS files and production node_modules
+# Copy built code, node_modules and static assets
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/public ./public   # ← bring in the public folder
+COPY --from=builder /app/public ./public
 COPY package.json ./
 
 EXPOSE 3000
