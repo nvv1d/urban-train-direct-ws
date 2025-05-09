@@ -1,0 +1,328 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Sesame Voice Chat</title>
+  <style>
+    body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+    #log { white-space: pre-wrap; background: #f0f0f0; padding: 10px; height: 200px; overflow-y: auto; font-family: monospace; }
+    button { padding: 8px 16px; margin: 5px; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    button:disabled { background: #ccc; }
+    #status { margin: 10px 0; padding: 5px; border-radius: 3px; }
+    .connected    { background: #d4edda; color: #155724; }
+    .disconnected { background: #f8d7da; color: #721c24; }
+    .connecting   { background: #fff3cd; color: #856404; }
+    .fetching     { background: #cce5ff; color: #004085; }
+  </style>
+</head>
+<body>
+  <h1>Sesame Voice Chat</h1>
+  <div id="status" class="disconnected">Disconnected</div>
+
+  <div>
+    <select id="characterSelect">
+      <option value="Maya">Maya</option>
+      <option value="Miles">Miles</option>
+    </select>
+    <button id="startBtn">Start Session</button>
+    <button id="stopBtn" disabled>Stop Session</button>
+  </div>
+
+  <div id="log"></div>
+
+  <script>
+  'use strict';
+
+  const SAMPLE_RATE       = 16000;
+  const AUDIO_CODEC       = 'none';
+  const CLIENT_NAME       = 'RP-Web';
+  const TIMEZONE          = 'America/Chicago';
+
+  let ws, sessionId, callId = null;
+  let mediaStream, audioContext;
+  let audioQueue = [], isPlaying = false;
+  let serverSampleRate = 24000;  // Default, will be updated from server
+
+  const statusEl = document.getElementById('status');
+  const logEl    = document.getElementById('log');
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn  = document.getElementById('stopBtn');
+  const charSel  = document.getElementById('characterSelect');
+
+  function log(msg) {
+    // Only log critical messages
+    if (msg.includes('Error:') || msg.includes('Connected to')) {
+      const t = new Date().toLocaleTimeString();
+      logEl.textContent += `[${t}] ${msg}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  }
+
+  function updateStatus(state) {
+    statusEl.className = state;
+    statusEl.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+  }
+
+  function genRequestId() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = Math.random()*16|0, v = c=='x'? r : (r&0x3|0x8);
+      return v.toString(16);
+    });
+  }
+
+  function base64ToArrayBuffer(b64) {
+    const bin = atob(b64);
+    const buf = new ArrayBuffer(bin.length);
+    const arr = new Uint8Array(buf);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return buf;
+  }
+
+  async function playAudio(buffer) {
+    if (!audioContext) return;
+    const int16 = new Int16Array(buffer);
+    const float32 = new Float32Array(int16.length);
+    for (let i = 0; i < int16.length; i++) {
+      float32[i] = int16[i] / 32768;
+    }
+    const audioBuf = audioContext.createBuffer(1, float32.length, serverSampleRate);
+    audioBuf.getChannelData(0).set(float32);
+    const src = audioContext.createBufferSource();
+    src.buffer = audioBuf;
+    src.connect(audioContext.destination);
+    return new Promise(res => { src.onended = res; src.start(); });
+  }
+
+  function processQueue() {
+    if (isPlaying || audioQueue.length === 0) return;
+    isPlaying = true;
+    playAudio(audioQueue.shift())
+      .catch(e => {
+        // Silent error handling to avoid audio glitches
+        console.error('Audio playback error:', e);
+      })
+      .finally(() => { 
+        isPlaying = false; 
+        // Process next chunk immediately
+        requestAnimationFrame(processQueue); 
+      });
+  }
+
+  function startMic() {
+    navigator.mediaDevices.getUserMedia({ 
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        sampleRate: SAMPLE_RATE
+      } 
+    })
+    .then(stream => {
+      mediaStream = stream;
+      const src = audioContext.createMediaStreamSource(stream);
+      // Use smaller buffer size for less latency
+      const proc = audioContext.createScriptProcessor(2048, 1, 1);
+      
+      // Connect but keep audio destination muted to avoid echo
+      src.connect(proc);
+      
+      // Only connect destination for processing to work, with zero gain
+      const gainNode = audioContext.createGain();
+      gainNode.gain.value = 0;
+      proc.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      proc.onaudioprocess = ev => {
+        if (ws.readyState !== WebSocket.OPEN || !callId) return;
+        const inF32 = ev.inputBuffer.getChannelData(0);
+        const pcm = new Int16Array(inF32.length);
+        
+        // Convert float32 to int16 for audio transmission
+        for (let i = 0; i < inF32.length; i++) {
+          const s = Math.max(-1, Math.min(1, inF32[i]));
+          pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
+        ws.send(JSON.stringify({
+          type: 'audio',
+          session_id: sessionId,
+          call_id: callId,
+          content: { audio_data: b64 }
+        }));
+      };
+    })
+    .catch(e => {
+      console.error('Mic error:', e);
+      ws.close();
+    });
+  }
+
+  function connect(wsUrl, character) {
+    updateStatus('connecting');
+    log(`→ WS connect: ${wsUrl.split('?')[0]}?[token omitted]`);
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      audioContext.resume().catch(e => {
+        log(`AC resume err: ${e.message}`);
+      });
+      updateStatus('connected');
+      log('→ WS OPEN');
+    };
+
+    ws.onmessage = ev => {
+      if (typeof ev.data === 'string') {
+        const msg = JSON.parse(ev.data);
+        
+        if (msg.type === 'initialize') {
+          sessionId = msg.content?.session_id || msg.session_id;
+
+          ws.send(JSON.stringify({
+            type: 'client_location_state',
+            session_id: sessionId,
+            call_id: null,
+            content: { latitude:0, longitude:0, address:'', timezone:TIMEZONE }
+          }));
+
+          ws.send(JSON.stringify({
+            type: 'call_connect',
+            session_id: sessionId,
+            call_id: null,
+            request_id: genRequestId(),
+            content: {
+              sample_rate: SAMPLE_RATE,
+              audio_codec: AUDIO_CODEC,
+              reconnect: false,
+              is_private: false,
+              client_name: CLIENT_NAME,
+              settings: { preset: character },
+              client_metadata: { 
+                language: 'en-US', 
+                user_agent: navigator.userAgent, 
+                mobile_browser: false,
+                media_devices: [] 
+              }
+            }
+          }));
+        }
+        else if (msg.type === 'call_connect_response' || (msg.type === 'chat' && msg.call_id)) {
+          callId = msg.call_id;
+          if (msg.content && msg.content.sample_rate) {
+            serverSampleRate = msg.content.sample_rate;
+          }
+          startMic();
+        }
+        else if (msg.type === 'audio') {
+          const b64 = msg.content?.audio_data;
+          if (b64) {
+            const buf = base64ToArrayBuffer(b64);
+            // Handle audio data immediately
+            audioQueue.push(buf);
+            // Start processing immediately if not already playing
+            if (!isPlaying) {
+              requestAnimationFrame(processQueue);
+            }
+          }
+        }
+      }
+    };
+
+    ws.onclose = () => {
+      updateStatus('disconnected');
+      log('× WS CLOSED');
+      mediaStream?.getTracks().forEach(t => t.stop());
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    };
+
+    ws.onerror = e => {
+      log(`× WS ERROR: ${e.message||e}`);
+    };
+  }
+
+  async function startSession() {
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    updateStatus('fetching');
+
+    const char = charSel.value;
+    const res = await fetch(`/capture-websocket/${char.toLowerCase()}`);
+    const j = await res.json();
+    if (!j.success) {
+      log(`Error: ${j.error}`);
+      startBtn.disabled = false;
+      return;
+    }
+    connect(j.websocketUrl, char);
+  }
+
+  function stopSession() {
+    // Immediately stop all audio elements
+    audioQueue = [];
+    isPlaying = false;
+    
+    // First stop audio capture
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(t => {
+        t.stop();
+        t.enabled = false;
+      });
+      mediaStream = null;
+    }
+    
+    // Close the audio context to completely stop audio processing
+    if (audioContext) {
+      audioContext.close().catch(() => {});
+      audioContext = null;
+    }
+    
+    let closeWs = true;
+    
+    // Send disconnect if websocket is connected
+    if (ws && ws.readyState === WebSocket.OPEN && callId && sessionId) {
+      try {
+        ws.send(JSON.stringify({
+          type: 'call_disconnect',
+          session_id: sessionId,
+          call_id: callId,
+          request_id: genRequestId(),
+          content: { reason: 'user_request' }
+        }));
+        
+        // Force close connection after a short timeout
+        closeWs = false;
+        setTimeout(() => {
+          if (ws) {
+            try { ws.close(); } catch (e) {}
+            ws = null;
+          }
+          sessionId = null;
+          callId = null;
+        }, 100);
+      } catch (err) {
+        console.error('Error sending disconnect:', err);
+      }
+    }
+    
+    // Close websocket immediately if we didn't send a message
+    if (closeWs && ws) {
+      try { ws.close(); } catch (e) {}
+      ws = null;
+      sessionId = null;
+      callId = null;
+    }
+    
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    updateStatus('disconnected');
+  }
+
+  startBtn.onclick = startSession;
+  stopBtn.onclick = stopSession;
+  updateStatus('disconnected');
+  </script>
+</body>
+</html>
