@@ -13,19 +13,19 @@ app.use(express.static(path.join(__dirname, '../public')));
  */
 app.get('/capture-websocket/:character', async (req, res) => {
   const character = req.params.character.toLowerCase();
-  
+
   if (character !== 'miles' && character !== 'maya') {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'Invalid character. Must be "miles" or "maya".' 
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid character. Must be "miles" or "maya".'
     });
   }
-  
+
   try {
-    const websocketUrl = await captureWebSocketUrl({ 
+    const websocketUrl = await captureWebSocketUrl({
       character: character as 'miles' | 'maya'
     });
-    
+
     if (websocketUrl) {
       // Minimal logging for performance
       
@@ -44,8 +44,8 @@ app.get('/capture-websocket/:character', async (req, res) => {
     }
   } catch (error: any) {
     console.error('Error capturing WebSocket URL:', error);
-    return res.json({ 
-      success: false, 
+    return res.json({
+      success: false,
       error: error?.message || 'An unexpected error occurred',
       timestamp: new Date().toISOString()
     });
@@ -54,11 +54,16 @@ app.get('/capture-websocket/:character', async (req, res) => {
 
 // Test endpoint for verifying the service is running
 app.get('/health', (_req, res) => {
-  res.json({ 
+  res.json({
     status: 'ok',
     version: '1.0.0',
     timestamp: new Date().toISOString()
   });
+});
+
+// Catch-all route to serve index.html for any unmatched routes
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
 // Start the server
