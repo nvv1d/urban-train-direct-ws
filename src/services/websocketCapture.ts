@@ -66,17 +66,17 @@ async function createAnonymousAccount(): Promise<{ idToken: string, refreshToken
   const url = getEndpointUrl('signup');
   const headers = getHeaders('signup');
   const payload = { returnSecureToken: true };
-  
+
   try {
     const response = await axios.post(url, payload, {
       headers,
       params: { key: DEFAULT_API_KEY }
     });
-    
+
     if (response.data.error) {
       throw new Error(`API Error: ${response.data.error.message}`);
     }
-    
+
     return {
       idToken: response.data.idToken,
       refreshToken: response.data.refreshToken
@@ -94,12 +94,12 @@ export async function captureWebSocketUrl({ character, timeout = 30000 }: Captur
   try {
     console.log(`Creating anonymous account for ${character}...`);
     const { idToken } = await createAnonymousAccount();
-    
+
     // These values match those in the Python implementation
     const clientName = "RP-Web";
     const userContext = JSON.stringify({ timezone: "America/Chicago" });
     const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36";
-    
+
     // Construct the WebSocket URL with query parameters
     const baseUrl = 'wss://sesameai.app/agent-service-0/v1/connect';
     const params = new URLSearchParams({
@@ -108,11 +108,10 @@ export async function captureWebSocketUrl({ character, timeout = 30000 }: Captur
       usercontext: userContext,
       character: character.charAt(0).toUpperCase() + character.slice(1) // Capitalize first letter
     });
-    
+
     const wsUrl = `${baseUrl}?${params.toString()}`;
     console.log(`Generated WebSocket URL for ${character}`);
     return wsUrl;
-    
   } catch (error) {
     console.error('Failed to capture WebSocket URL:', error);
     return null;
