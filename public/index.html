@@ -104,6 +104,27 @@
   const stopBtn  = document.getElementById('stopBtn');
   const charSel  = document.getElementById('characterSelect');
 
+  // Helper function to safely get a string ID and truncate it
+  function safeGetId(id, length = 8) {
+    if (!id) return 'undefined';
+    
+    // If id is an object with an 'id' property, use that
+    if (typeof id === 'object' && id !== null) {
+      if (id.id && typeof id.id === 'string') {
+        return id.id.substring(0, length) + '...';
+      }
+      return 'object';
+    }
+    
+    // If id is already a string, use it directly
+    if (typeof id === 'string') {
+      return id.substring(0, length) + '...';
+    }
+    
+    // For any other type, convert to string
+    return String(id).substring(0, length) + '...';
+  }
+
   function log(msg) {
     // Log all messages in debug mode
     const t = new Date().toLocaleTimeString();
@@ -210,10 +231,13 @@
         
         const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
         try {
+          // Extract the actual ID if callId is an object
+          const actualCallId = typeof callId === 'object' && callId !== null && callId.id ? callId.id : callId;
+          
           ws.send(JSON.stringify({
             type: 'audio',
             session_id: sessionId,
-            call_id: callId,
+            call_id: actualCallId,
             content: { audio_data: b64 }
           }));
         } catch (e) {
@@ -262,8 +286,9 @@
           const msg = JSON.parse(ev.data);
           
           if (msg.type === 'initialize') {
+            // Extract session ID from either content.session_id or directly
             sessionId = msg.content?.session_id || msg.session_id;
-            log(`→ Session initialized: ${sessionId ? sessionId.substring(0, 8) + '...' : 'undefined'}`);
+            log(`→ Session initialized: ${safeGetId(sessionId)}`);
 
             ws.send(JSON.stringify({
               type: 'client_location_state',
@@ -293,12 +318,22 @@
               }
             }));
           }
-          else if (msg.type === 'call_connect_response' || (msg.type === 'chat' && msg.call_id)) {
-            callId = msg.call_id;
+          else if (msg.type === 'call_connect_response' || (msg.type === 'chat' && (msg.call_id || msg.content?.call_id))) {
+            // Extract call ID from either direct property or content
+            callId = msg.call_id || msg.content?.call_id;
+            
             if (msg.content && msg.content.sample_rate) {
               serverSampleRate = msg.content.sample_rate;
             }
-            log(`→ Call connected: ${callId ? callId.substring(0, 8) + '...' : 'undefined'}`);
+            
+            // Log using our safe function
+            log(`→ Call connected: ${safeGetId(callId)}`);
+            
+            // Debug log the actual structure of callId
+            if (typeof callId === 'object' && callId !== null) {
+              log(`→ Call ID structure: ${JSON.stringify(callId)}`);
+            }
+            
             startMic();
           }
           else if (msg.type === 'audio') {
@@ -319,6 +354,8 @@
         }
       } catch (e) {
         log(`× Message processing error: ${e.message || e}`);
+        // Debug log for helping diagnose issues
+        log(`→ Message data: ${ev.data.substring(0, 100)}...`);
       }
     };
 
@@ -414,10 +451,13 @@
     // Send disconnect if websocket is connected
     if (ws && ws.readyState === WebSocket.OPEN && callId && sessionId) {
       try {
+        // Extract the actual ID if callId is an object
+        const actualCallId = typeof callId === 'object' && callId !== null && callId.id ? callId.id : callId;
+        
         ws.send(JSON.stringify({
           type: 'call_disconnect',
           session_id: sessionId,
-          call_id: callId,
+          call_id: actualCallId,
           request_id: genRequestId(),
           content: { reason: 'user_request' }
         }));
