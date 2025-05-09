@@ -263,7 +263,7 @@
           
           if (msg.type === 'initialize') {
             sessionId = msg.content?.session_id || msg.session_id;
-            log(`→ Session initialized: ${sessionId.substring(0, 8)}...`);
+            log(`→ Session initialized: ${sessionId ? sessionId.substring(0, 8) + '...' : 'undefined'}`);
 
             ws.send(JSON.stringify({
               type: 'client_location_state',
@@ -298,7 +298,7 @@
             if (msg.content && msg.content.sample_rate) {
               serverSampleRate = msg.content.sample_rate;
             }
-            log(`→ Call connected: ${callId.substring(0, 8)}...`);
+            log(`→ Call connected: ${callId ? callId.substring(0, 8) + '...' : 'undefined'}`);
             startMic();
           }
           else if (msg.type === 'audio') {
