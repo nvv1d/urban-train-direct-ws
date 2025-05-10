@@ -34,7 +34,6 @@
   <script>
   'use strict';
 
-  const DEBUG_MODE = true;
   const SAMPLE_RATE = 16000;
   const AUDIO_CODEC = 'none';
   const CLIENT_NAME = 'RP-Web';
@@ -57,18 +56,12 @@
   const micSel   = document.getElementById('micSelect');
 
   function log(msg, obj = null) {
-    if (!DEBUG_MODE && /debug/i.test(msg)) return;
-    const t = new Date().toLocaleTimeString();
-    logEl.textContent += `[${t}] ${msg}\n`;
-    if (obj && DEBUG_MODE) logEl.textContent += `[${t}] ${JSON.stringify(obj, null, 2)}\n`;
-    logEl.scrollTop = logEl.scrollHeight;
-    if (DEBUG_MODE) console.log(msg, obj);
+    // No-op: all logging removed
   }
 
   function updateStatus(state) {
     statusEl.className = state;
     statusEl.textContent = state.charAt(0).toUpperCase() + state.slice(1);
-    log(`Status updated: ${state}`);
   }
 
   function genRequestId() {
@@ -99,7 +92,6 @@
       src.connect(audioContext.destination);
       return new Promise(res => { src.onended = res; src.start(); });
     } catch (e) {
-      log('Audio processing error:', e);
       return Promise.resolve();
     }
   }
@@ -108,16 +100,12 @@
     if (isPlaying || audioQueue.length === 0) return;
     isPlaying = true;
     playAudio(audioQueue.shift())
-      .catch(e => {
-        log('Audio playback error:', e);
-      })
       .finally(() => {
         isPlaying = false;
         requestAnimationFrame(processQueue);
       });
   }
 
-  // --- Utility for safe callId usage
   function callIdString(ci) {
     if (!ci) return '';
     if (typeof ci === "string") return ci;
@@ -125,17 +113,13 @@
     return String(ci);
   }
 
-  // --- Improved Device Enumeration
   async function populateMicList() {
     micSel.innerHTML = '';
     let devices = [];
     try {
-      // Prompt for mic permission so enumerateDevices returns actual labels
       await navigator.mediaDevices.getUserMedia({ audio: true });
       devices = await navigator.mediaDevices.enumerateDevices();
-    } catch (e) {
-      log('Microphone permission or device error:', e);
-    }
+    } catch (e) {}
     const mics = devices.filter(d => d.kind === 'audioinput');
     if (mics.length === 0) {
       const option = document.createElement('option');
@@ -154,7 +138,6 @@
     }
   }
 
-  // --- Microphone streaming logic with audio energy visualization ---
   async function startMic() {
     if (mediaStream) {
       mediaStream.getTracks().forEach(t => t.stop());
@@ -166,7 +149,6 @@
     }
     audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
 
-    // Use the selected mic device
     const constraints = {
       audio: {
         deviceId: selectedMicId ? { exact: selectedMicId } : undefined,
@@ -180,10 +162,9 @@
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
       micSource = audioContext.createMediaStreamSource(mediaStream);
-      scriptNode = audioContext.createScriptProcessor(1024, 1, 1); // match Python CHUNK
+      scriptNode = audioContext.createScriptProcessor(1024, 1, 1);
 
       micSource.connect(scriptNode);
-      // No feedback to speakers; for energy metering only
       const gainNode = audioContext.createGain();
       gainNode.gain.value = 0;
       scriptNode.connect(gainNode);
@@ -191,27 +172,21 @@
 
       scriptNode.onaudioprocess = function(ev) {
         const input = ev.inputBuffer.getChannelData(0);
-        // Convert to Int16 PCM
         const pcm = new Int16Array(input.length);
         for (let i = 0; i < input.length; ++i) {
           let s = Math.max(-1, Math.min(1, input[i]));
           pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
-        // Calculate energy for visualization
         const energy = Math.sqrt(pcm.reduce((acc, v) => acc + v*v, 0) / pcm.length);
         energyHistory.push(energy);
         if (energyHistory.length > 5) energyHistory.shift();
 
-        // Visualize energy
         if (!audioLevelInterval) {
           audioLevelInterval = setInterval(() => {
-            const avg = energyHistory.length ? energyHistory.reduce((a,b)=>a+b,0)/energyHistory.length : 0;
-            const bars = Math.min(20, Math.floor(avg/500));
-            log(`Mic: [${'|'.repeat(bars)}${' '.repeat(20-bars)}] Level: ${avg.toFixed(0)}`);
+            // No-op: energy visualization removed
           }, 200);
         }
 
-        // Send to websocket
         if (ws && ws.readyState === WebSocket.OPEN && callId) {
           const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
           ws.send(JSON.stringify({
@@ -220,31 +195,23 @@
             call_id: callIdString(callId),
             content: { audio_data: b64 }
           }));
-          log('Mic audio sent over WebSocket.', {len: pcm.length, sample: Array.from(pcm.slice(0,8))});
         }
       };
-
-      log('Microphone access granted.');
     } catch (err) {
-      log('Error accessing microphone: ' + (err && (err.message || typeof err)));
       updateStatus('disconnected');
       stopSession();
     }
   }
 
-  // --- Device selector logic ---
   micSel.onchange = () => {
     selectedMicId = micSel.value;
-    log('Selected mic device: ' + selectedMicId);
   };
 
   function connect(wsUrl, character) {
     updateStatus('connecting');
-    log(`→ Connecting to WebSocket... URL: ${wsUrl}`);
     try {
       ws = new WebSocket(wsUrl);
     } catch (e) {
-      log(`× WS Connection Error: ${e.message || e}`);
       updateStatus('disconnected');
       startBtn.disabled = false;
       stopBtn.disabled = true;
@@ -253,14 +220,10 @@
 
     ws.onopen = () => {
       try {
-        log('→ WebSocket connected');
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        audioContext.resume().catch(e => {
-          log(`Audio Context resume error: ${e.message}`);
-        });
+        audioContext.resume().catch(() => {});
         updateStatus('connected');
       } catch (e) {
-        log(`× Audio Context Error: ${e.message || e}`);
         ws.close();
       }
     };
@@ -271,7 +234,6 @@
           const msg = JSON.parse(ev.data);
           if (msg.type === 'initialize') {
             sessionId = msg.content?.session_id || msg.session_id;
-            log(`→ Session initialized: ${sessionId?.substring(0,8)}...`, msg);
 
             ws.send(JSON.stringify({
               type: 'client_location_state',
@@ -303,11 +265,8 @@
           }
           else if (msg.type === 'call_connect_response' || (msg.type === 'chat' && (msg.call_id || msg.content?.call_id))) {
             callId = msg.call_id || msg.content?.call_id;
-            // Fix: always use callIdString to avoid errors
-            log(`→ Call connected: ${callIdString(callId).substring(0,8)}...`);
             if (msg.content && msg.content.sample_rate) {
               serverSampleRate = msg.content.sample_rate;
-              log(`Server sample rate set: ${serverSampleRate}`);
             }
             startMic();
           }
@@ -319,19 +278,12 @@
               if (!isPlaying) requestAnimationFrame(processQueue);
             }
           }
-          else if (msg.type === 'error') {
-            log(`× Service error: ${msg.content?.error || 'Unknown error'}`);
-          }
         }
-      } catch (e) {
-        log(`× Message processing error: ${e.message || e}`);
-        log(`→ Message data: ${typeof ev.data === "string" ? ev.data.substring(0, 100) : ""}...`);
-      }
+      } catch (e) {}
     };
 
     ws.onclose = () => {
       updateStatus('disconnected');
-      log('× WebSocket closed');
       if (mediaStream) {
         mediaStream.getTracks().forEach(t => t.stop());
         mediaStream = null;
@@ -340,14 +292,11 @@
       stopBtn.disabled = true;
     };
 
-    ws.onerror = e => {
-      log(`× WebSocket error: ${e.message || 'Unknown error'}`, e);
-    };
+    ws.onerror = () => {};
   }
 
   async function startSession() {
     logEl.textContent = '';
-    log('Starting session...');
     startBtn.disabled = true;
     stopBtn.disabled = false;
     updateStatus('fetching');
@@ -357,8 +306,6 @@
     try {
       const res = await fetch(`/capture-websocket/${char.toLowerCase()}`);
       if (!res.ok) {
-        const text = await res.text();
-        log(`× Server error: ${res.status} ${text}`);
         startBtn.disabled = false;
         stopBtn.disabled = true;
         updateStatus('disconnected');
@@ -367,17 +314,14 @@
 
       const j = await res.json();
       if (!j.success) {
-        log(`× Error: ${j.error}`);
         startBtn.disabled = false;
         stopBtn.disabled = true;
         updateStatus('disconnected');
         return;
       }
 
-      log(`→ Received WebSocket URL for ${j.character}: ${j.websocketUrl}`);
       connect(j.websocketUrl, char);
     } catch (e) {
-      log(`× Fetch error: ${e.message || e}`);
       startBtn.disabled = false;
       stopBtn.disabled = true;
       updateStatus('disconnected');
@@ -385,22 +329,19 @@
   }
 
   function stopSession() {
-    log('Stopping session...');
     audioQueue = [];
     isPlaying = false;
 
     if (mediaStream) {
       mediaStream.getTracks().forEach(t => {
-        try { t.stop(); t.enabled = false; } catch (e) { log('Track stop error:', e); }
+        try { t.stop(); t.enabled = false; } catch (e) {}
       });
       mediaStream = null;
-      log('MediaStream tracks stopped.');
     }
 
     if (audioContext) {
-      try { audioContext.close(); } catch (e) { log('Audio context close error:', e); }
+      try { audioContext.close(); } catch (e) {}
       audioContext = null;
-      log('AudioContext closed.');
     }
 
     if (audioLevelInterval) {
@@ -427,11 +368,8 @@
           }
           sessionId = null;
           callId = null;
-          log('WebSocket closed after disconnect.');
         }, 100);
-      } catch (err) {
-        log('Error sending disconnect:', err);
-      }
+      } catch (err) {}
     }
 
     if (closeWs && ws) {
@@ -439,7 +377,6 @@
       ws = null;
       sessionId = null;
       callId = null;
-      log('WebSocket closed immediately.');
     }
 
     startBtn.disabled = false;
@@ -449,15 +386,12 @@
 
   window.addEventListener('load', () => {
     if (!window.WebSocket) {
-      log('Error: WebSockets not supported in this browser');
       startBtn.disabled = true;
     }
     if (!window.AudioContext && !window.webkitAudioContext) {
-      log('Error: Web Audio API not supported in this browser');
       startBtn.disabled = true;
     }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      log('Error: getUserMedia not supported in this browser');
       startBtn.disabled = true;
     }
     populateMicList();
@@ -465,7 +399,7 @@
 
   startBtn.onclick = startSession;
   stopBtn.onclick = stopSession;
-  micSel.onfocus = populateMicList; // Update list if user clicks before session
+  micSel.onfocus = populateMicList;
   updateStatus('disconnected');
   </script>
 </body>
