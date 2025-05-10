@@ -42,8 +42,12 @@
 
   let ws, sessionId, callId = null;
   let mediaStream, audioContext;
+  let micSource, scriptNode; // For audio input
+  let selectedMicId = null;
   let audioQueue = [], isPlaying = false;
   let serverSampleRate = 24000;
+  let energyHistory = [];
+  let audioLevelInterval;
 
   const statusEl = document.getElementById('status');
   const logEl    = document.getElementById('log');
@@ -150,69 +154,89 @@
     }
   }
 
-  function startMic() {
-    log('Attempting to start microphone...');
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      log('Error: getUserMedia not supported in this browser');
-      updateStatus('disconnected');
-      stopSession();
-      return;
+  // --- Microphone streaming logic with audio energy visualization ---
+  async function startMic() {
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(t => t.stop());
+      mediaStream = null;
     }
+    if (audioContext) {
+      try { audioContext.close(); } catch (e) {}
+      audioContext = null;
+    }
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
 
-    const selectedMic = micSel.value;
-    navigator.mediaDevices.getUserMedia({
+    // Use the selected mic device
+    const constraints = {
       audio: {
-        deviceId: selectedMic ? { exact: selectedMic } : undefined,
+        deviceId: selectedMicId ? { exact: selectedMicId } : undefined,
+        channelCount: 1,
+        sampleRate: SAMPLE_RATE,
         echoCancellation: true,
         noiseSuppression: true,
-        autoGainControl: true,
-        sampleRate: SAMPLE_RATE
+        autoGainControl: true
       }
-    })
-    .then(stream => {
-      log('Microphone access granted.');
-      mediaStream = stream;
-      const src = audioContext.createMediaStreamSource(stream);
-      const proc = audioContext.createScriptProcessor(2048, 1, 1);
+    };
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      micSource = audioContext.createMediaStreamSource(mediaStream);
+      scriptNode = audioContext.createScriptProcessor(1024, 1, 1); // match Python CHUNK
 
-      src.connect(proc);
-
+      micSource.connect(scriptNode);
+      // No feedback to speakers; for energy metering only
       const gainNode = audioContext.createGain();
       gainNode.gain.value = 0;
-      proc.connect(gainNode);
+      scriptNode.connect(gainNode);
       gainNode.connect(audioContext.destination);
 
-      proc.onaudioprocess = ev => {
-        if (!ws || ws.readyState !== WebSocket.OPEN || !callId) {
-          log('Audio processing skipped: WebSocket not open or callId missing.');
-          return;
-        }
-        const inF32 = ev.inputBuffer.getChannelData(0);
-        const pcm = new Int16Array(inF32.length);
-        for (let i = 0; i < inF32.length; i++) {
-          const s = Math.max(-1, Math.min(1, inF32[i]));
+      scriptNode.onaudioprocess = function(ev) {
+        const input = ev.inputBuffer.getChannelData(0);
+        // Convert to Int16 PCM
+        const pcm = new Int16Array(input.length);
+        for (let i = 0; i < input.length; ++i) {
+          let s = Math.max(-1, Math.min(1, input[i]));
           pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
-        const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
-        try {
+        // Calculate energy for visualization
+        const energy = Math.sqrt(pcm.reduce((acc, v) => acc + v*v, 0) / pcm.length);
+        energyHistory.push(energy);
+        if (energyHistory.length > 5) energyHistory.shift();
+
+        // Visualize energy
+        if (!audioLevelInterval) {
+          audioLevelInterval = setInterval(() => {
+            const avg = energyHistory.length ? energyHistory.reduce((a,b)=>a+b,0)/energyHistory.length : 0;
+            const bars = Math.min(20, Math.floor(avg/500));
+            log(`Mic: [${'|'.repeat(bars)}${' '.repeat(20-bars)}] Level: ${avg.toFixed(0)}`);
+          }, 200);
+        }
+
+        // Send to websocket
+        if (ws && ws.readyState === WebSocket.OPEN && callId) {
+          const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
           ws.send(JSON.stringify({
             type: 'audio',
             session_id: sessionId,
             call_id: callIdString(callId),
             content: { audio_data: b64 }
           }));
-          log('Mic audio sent over WebSocket.', {len: pcm.length, sample: pcm.slice(0,8)});
-        } catch (e) {
-          log('WebSocket send error:', e);
+          log('Mic audio sent over WebSocket.', {len: pcm.length, sample: Array.from(pcm.slice(0,8))});
         }
       };
-    })
-    .catch(e => {
-      log(`Error accessing microphone: ${e.message || e}`);
+
+      log('Microphone access granted.');
+    } catch (err) {
+      log('Error accessing microphone: ' + (err && (err.message || typeof err)));
       updateStatus('disconnected');
       stopSession();
-    });
+    }
   }
+
+  // --- Device selector logic ---
+  micSel.onchange = () => {
+    selectedMicId = micSel.value;
+    log('Selected mic device: ' + selectedMicId);
+  };
 
   function connect(wsUrl, character) {
     updateStatus('connecting');
@@ -329,6 +353,7 @@
     updateStatus('fetching');
 
     const char = charSel.value;
+    selectedMicId = micSel.value;
     try {
       const res = await fetch(`/capture-websocket/${char.toLowerCase()}`);
       if (!res.ok) {
@@ -376,6 +401,11 @@
       try { audioContext.close(); } catch (e) { log('Audio context close error:', e); }
       audioContext = null;
       log('AudioContext closed.');
+    }
+
+    if (audioLevelInterval) {
+      clearInterval(audioLevelInterval);
+      audioLevelInterval = null;
     }
 
     let closeWs = true;
