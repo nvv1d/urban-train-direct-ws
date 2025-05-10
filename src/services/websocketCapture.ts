@@ -11,10 +11,6 @@ interface CaptureOptions {
   timeout?: number;
 }
 
-// Firebase auth endpoints
-const FIREBASE_AUTH_BASE_URL = "https://identitytoolkit.googleapis.com/v1/accounts";
-const FIREBASE_TOKEN_URL = "https://securetoken.googleapis.com/v1/token";
-
 /**
  * Debug log helper
  */
@@ -29,6 +25,10 @@ function debugLog(msg: string, obj?: any) {
     }
   }
 }
+
+// Firebase auth endpoints
+const FIREBASE_AUTH_BASE_URL = "https://identitytoolkit.googleapis.com/v1/accounts";
+const FIREBASE_TOKEN_URL = "https://securetoken.googleapis.com/v1/token";
 
 /**
  * Generate Firebase client header value
@@ -130,4 +130,33 @@ export async function captureVoiceStream(options: CaptureOptions) {
   }
 }
 
-// More service logic can be debug-logged as above.
+/**
+ * Public: Returns a websocket URL for the given character
+ */
+export async function captureWebSocketUrl(options: CaptureOptions): Promise<string | null> {
+  debugLog('captureWebSocketUrl called', options);
+  try {
+    // 1. Create anonymous Firebase account (get idToken)
+    const { idToken } = await createAnonymousAccount();
+    debugLog('Obtained idToken', idToken ? idToken.substring(0, 12) + '...' : null);
+
+    // 2. Construct the websocket URL
+    // Example endpoint:
+    // wss://sesameai.app/agent-service-0/v1/connect?id_token=...&client_name=RP-Web&usercontext=%7B%22timezone%22%3A%22America%2FChicago%22%7D&character=Maya
+    const baseUrl = "wss://sesameai.app/agent-service-0/v1/connect";
+    const params = new URLSearchParams({
+      id_token: idToken,
+      client_name: 'RP-Web',
+      usercontext: JSON.stringify({ timezone: 'America/Chicago' }),
+      character: options.character.charAt(0).toUpperCase() + options.character.slice(1)
+    });
+    const websocketUrl = `${baseUrl}?${params.toString()}`;
+
+    debugLog('Constructed websocket URL', websocketUrl);
+
+    return websocketUrl;
+  } catch (error: any) {
+    debugLog('Error in captureWebSocketUrl', error?.message || error);
+    return null;
+  }
+}
