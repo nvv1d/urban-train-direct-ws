@@ -6,7 +6,6 @@
   <title>Sesame Voice Chat</title>
   <style>
     body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-    #log { white-space: pre-wrap; background: #f0f0f0; padding: 10px; height: 200px; overflow-y: auto; font-family: monospace; border-radius: 4px; margin-top: 20px; }
     button { padding: 8px 16px; margin: 5px; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
     button:disabled { background: #bbb; }
     .controls { margin: 20px 0; }
@@ -29,8 +28,6 @@
     <button id="stopBtn" disabled>Stop Session</button>
   </div>
 
-  <div id="log"></div>
-
   <script>
   'use strict';
 
@@ -41,7 +38,7 @@
 
   let ws, sessionId, callId = null;
   let mediaStream, audioContext;
-  let micSource, scriptNode; // For audio input
+  let micSource, scriptNode;
   let selectedMicId = null;
   let audioQueue = [], isPlaying = false;
   let serverSampleRate = 24000;
@@ -49,15 +46,10 @@
   let audioLevelInterval;
 
   const statusEl = document.getElementById('status');
-  const logEl    = document.getElementById('log');
   const startBtn = document.getElementById('startBtn');
   const stopBtn  = document.getElementById('stopBtn');
   const charSel  = document.getElementById('characterSelect');
   const micSel   = document.getElementById('micSelect');
-
-  function log(msg, obj = null) {
-    // No-op: all logging removed
-  }
 
   function updateStatus(state) {
     statusEl.className = state;
@@ -177,16 +169,6 @@
           let s = Math.max(-1, Math.min(1, input[i]));
           pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
-        const energy = Math.sqrt(pcm.reduce((acc, v) => acc + v*v, 0) / pcm.length);
-        energyHistory.push(energy);
-        if (energyHistory.length > 5) energyHistory.shift();
-
-        if (!audioLevelInterval) {
-          audioLevelInterval = setInterval(() => {
-            // No-op: energy visualization removed
-          }, 200);
-        }
-
         if (ws && ws.readyState === WebSocket.OPEN && callId) {
           const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
           ws.send(JSON.stringify({
@@ -296,7 +278,6 @@
   }
 
   async function startSession() {
-    logEl.textContent = '';
     startBtn.disabled = true;
     stopBtn.disabled = false;
     updateStatus('fetching');
