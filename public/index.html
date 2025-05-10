@@ -5,68 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sesame Voice Chat</title>
   <style>
-    body { 
-      font-family: sans-serif; 
-      max-width: 800px; 
-      margin: 0 auto; 
-      padding: 20px;
-    }
-    #log { 
-      white-space: pre-wrap; 
-      background: #f0f0f0; 
-      padding: 10px; 
-      height: 200px; 
-      overflow-y: auto; 
-      font-family: monospace;
-      border-radius: 4px;
-      margin-top: 20px;
-    }
-    button { 
-      padding: 8px 16px; 
-      margin: 5px; 
-      background: #4a90e2; 
-      color: white; 
-      border: none; 
-      border-radius: 4px; 
-      cursor: pointer;
-      font-size: 16px;
-    }
-    button:disabled { 
-      background: #ccc; 
-    }
-    #status { 
-      margin: 10px 0; 
-      padding: 8px; 
-      border-radius: 4px;
-      font-weight: bold;
-    }
-    #characterSelect {
-      padding: 8px;
-      border-radius: 4px;
-      border: 1px solid #ddd;
-      font-size: 16px;
-    }
-    .connected    { background: #d4edda; color: #155724; }
-    .disconnected { background: #f8d7da; color: #721c24; }
-    .connecting   { background: #fff3cd; color: #856404; }
-    .fetching     { background: #cce5ff; color: #004085; }
-    .controls {
-      display: flex;
-      align-items: center;
-      margin: 20px 0;
-    }
+    body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+    #log { white-space: pre-wrap; background: #f0f0f0; padding: 10px; height: 200px; overflow-y: auto; font-family: monospace; border-radius: 4px; margin-top: 20px; }
+    button { padding: 8px 16px; margin: 5px; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+    button:disabled { background: #bbb; }
+    .controls { margin: 20px 0; }
     @media (max-width: 600px) {
-      body {
-        padding: 10px;
-      }
-      .controls {
-        flex-direction: column;
-        align-items: stretch;
-      }
-      button, #characterSelect {
-        margin: 5px 0;
-        width: 100%;
-      }
+      button, #characterSelect { margin: 5px 0; width: 100%; }
     }
   </style>
 </head>
@@ -88,6 +33,9 @@
   <script>
   'use strict';
 
+  // Debug mode toggling
+  const DEBUG_MODE = true;
+
   const SAMPLE_RATE       = 16000;
   const AUDIO_CODEC       = 'none';
   const CLIENT_NAME       = 'RP-Web';
@@ -107,34 +55,27 @@
   // Helper function to safely get a string ID and truncate it
   function safeGetId(id, length = 8) {
     if (!id) return 'undefined';
-    
-    // If id is an object with an 'id' property, use that
     if (typeof id === 'object' && id !== null) {
-      if (id.id && typeof id.id === 'string') {
-        return id.id.substring(0, length) + '...';
-      }
+      if (id.id && typeof id.id === 'string') return id.id.substring(0, length) + '...';
       return 'object';
     }
-    
-    // If id is already a string, use it directly
-    if (typeof id === 'string') {
-      return id.substring(0, length) + '...';
-    }
-    
-    // For any other type, convert to string
+    if (typeof id === 'string') return id.substring(0, length) + '...';
     return String(id).substring(0, length) + '...';
   }
 
-  function log(msg) {
-    // Log all messages in debug mode
+  function log(msg, obj = null) {
+    if (!DEBUG_MODE && /debug/i.test(msg)) return;
     const t = new Date().toLocaleTimeString();
     logEl.textContent += `[${t}] ${msg}\n`;
+    if (obj && DEBUG_MODE) logEl.textContent += `[${t}] ${JSON.stringify(obj, null, 2)}\n`;
     logEl.scrollTop = logEl.scrollHeight;
+    if (DEBUG_MODE) console.log(msg, obj);
   }
 
   function updateStatus(state) {
     statusEl.className = state;
     statusEl.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+    log(`Status updated: ${state}`);
   }
 
   function genRequestId() {
@@ -157,9 +98,7 @@
     try {
       const int16 = new Int16Array(buffer);
       const float32 = new Float32Array(int16.length);
-      for (let i = 0; i < int16.length; i++) {
-        float32[i] = int16[i] / 32768;
-      }
+      for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
       const audioBuf = audioContext.createBuffer(1, float32.length, serverSampleRate);
       audioBuf.getChannelData(0).set(float32);
       const src = audioContext.createBufferSource();
@@ -167,7 +106,7 @@
       src.connect(audioContext.destination);
       return new Promise(res => { src.onended = res; src.start(); });
     } catch (e) {
-      console.error('Audio processing error:', e);
+      log('Audio processing error:', e);
       return Promise.resolve(); // Continue even if there's an error
     }
   }
@@ -177,17 +116,16 @@
     isPlaying = true;
     playAudio(audioQueue.shift())
       .catch(e => {
-        // Silent error handling to avoid audio glitches
-        console.error('Audio playback error:', e);
+        log('Audio playback error:', e);
       })
-      .finally(() => { 
-        isPlaying = false; 
-        // Process next chunk immediately
-        requestAnimationFrame(processQueue); 
+      .finally(() => {
+        isPlaying = false;
+        requestAnimationFrame(processQueue);
       });
   }
 
   function startMic() {
+    log('Attempting to start microphone...');
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       log('Error: getUserMedia not supported in this browser');
       updateStatus('disconnected');
@@ -195,53 +133,51 @@
       return;
     }
 
-    navigator.mediaDevices.getUserMedia({ 
+    navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
         sampleRate: SAMPLE_RATE
-      } 
+      }
     })
     .then(stream => {
+      log('Microphone access granted.');
       mediaStream = stream;
       const src = audioContext.createMediaStreamSource(stream);
-      // Use smaller buffer size for less latency
       const proc = audioContext.createScriptProcessor(2048, 1, 1);
-      
-      // Connect but keep audio destination muted to avoid echo
+
       src.connect(proc);
-      
-      // Only connect destination for processing to work, with zero gain
+
+      // Muted gain node to prevent echo
       const gainNode = audioContext.createGain();
       gainNode.gain.value = 0;
       proc.connect(gainNode);
       gainNode.connect(audioContext.destination);
-      
+
       proc.onaudioprocess = ev => {
-        if (!ws || ws.readyState !== WebSocket.OPEN || !callId) return;
+        if (!ws || ws.readyState !== WebSocket.OPEN || !callId) {
+          log('Audio processing skipped: WebSocket not open or callId missing.');
+          return;
+        }
         const inF32 = ev.inputBuffer.getChannelData(0);
         const pcm = new Int16Array(inF32.length);
-        
-        // Convert float32 to int16 for audio transmission
         for (let i = 0; i < inF32.length; i++) {
           const s = Math.max(-1, Math.min(1, inF32[i]));
           pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
-        
         const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
         try {
-          // Extract the actual ID if callId is an object
           const actualCallId = typeof callId === 'object' && callId !== null && callId.id ? callId.id : callId;
-          
           ws.send(JSON.stringify({
             type: 'audio',
             session_id: sessionId,
             call_id: actualCallId,
             content: { audio_data: b64 }
           }));
+          log('Mic audio sent over WebSocket.', {len: pcm.length, sample: pcm.slice(0,8)});
         } catch (e) {
-          console.error('WebSocket send error:', e);
+          log('WebSocket send error:', e);
         }
       };
     })
@@ -254,8 +190,7 @@
 
   function connect(wsUrl, character) {
     updateStatus('connecting');
-    log(`→ Connecting to WebSocket...`);
-    
+    log(`→ Connecting to WebSocket... URL: ${wsUrl}`);
     try {
       ws = new WebSocket(wsUrl);
     } catch (e) {
@@ -268,12 +203,12 @@
 
     ws.onopen = () => {
       try {
+        log('→ WebSocket connected');
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         audioContext.resume().catch(e => {
           log(`Audio Context resume error: ${e.message}`);
         });
         updateStatus('connected');
-        log('→ WebSocket connected');
       } catch (e) {
         log(`× Audio Context Error: ${e.message || e}`);
         ws.close();
@@ -284,11 +219,9 @@
       try {
         if (typeof ev.data === 'string') {
           const msg = JSON.parse(ev.data);
-          
           if (msg.type === 'initialize') {
-            // Extract session ID from either content.session_id or directly
             sessionId = msg.content?.session_id || msg.session_id;
-            log(`→ Session initialized: ${safeGetId(sessionId)}`);
+            log(`→ Session initialized: ${safeGetId(sessionId)}`, msg);
 
             ws.send(JSON.stringify({
               type: 'client_location_state',
@@ -309,43 +242,33 @@
                 is_private: false,
                 client_name: CLIENT_NAME,
                 settings: { preset: character },
-                client_metadata: { 
-                  language: 'en-US', 
-                  user_agent: navigator.userAgent, 
-                  mobile_browser: /Mobi|Android/i.test(navigator.userAgent), 
-                  media_devices: [] 
+                client_metadata: {
+                  language: 'en-US',
+                  user_agent: navigator.userAgent,
+                  mobile_browser: /Mobi|Android/i.test(navigator.userAgent),
+                  media_devices: []
                 }
               }
             }));
           }
           else if (msg.type === 'call_connect_response' || (msg.type === 'chat' && (msg.call_id || msg.content?.call_id))) {
-            // Extract call ID from either direct property or content
             callId = msg.call_id || msg.content?.call_id;
-            
             if (msg.content && msg.content.sample_rate) {
               serverSampleRate = msg.content.sample_rate;
+              log(`Server sample rate set: ${serverSampleRate}`);
             }
-            
-            // Log using our safe function
             log(`→ Call connected: ${safeGetId(callId)}`);
-            
-            // Debug log the actual structure of callId
             if (typeof callId === 'object' && callId !== null) {
               log(`→ Call ID structure: ${JSON.stringify(callId)}`);
             }
-            
             startMic();
           }
           else if (msg.type === 'audio') {
             const b64 = msg.content?.audio_data;
             if (b64) {
               const buf = base64ToArrayBuffer(b64);
-              // Handle audio data immediately
               audioQueue.push(buf);
-              // Start processing immediately if not already playing
-              if (!isPlaying) {
-                requestAnimationFrame(processQueue);
-              }
+              if (!isPlaying) requestAnimationFrame(processQueue);
             }
           }
           else if (msg.type === 'error') {
@@ -354,7 +277,6 @@
         }
       } catch (e) {
         log(`× Message processing error: ${e.message || e}`);
-        // Debug log for helping diagnose issues
         log(`→ Message data: ${ev.data.substring(0, 100)}...`);
       }
     };
@@ -371,15 +293,13 @@
     };
 
     ws.onerror = e => {
-      log(`× WebSocket error: ${e.message || 'Unknown error'}`);
+      log(`× WebSocket error: ${e.message || 'Unknown error'}`, e);
     };
   }
 
   async function startSession() {
-    // Clear previous log
     logEl.textContent = '';
     log('Starting session...');
-    
     startBtn.disabled = true;
     stopBtn.disabled = false;
     updateStatus('fetching');
@@ -387,7 +307,6 @@
     const char = charSel.value;
     try {
       const res = await fetch(`/capture-websocket/${char.toLowerCase()}`);
-      
       if (!res.ok) {
         const text = await res.text();
         log(`× Server error: ${res.status} ${text}`);
@@ -396,7 +315,7 @@
         updateStatus('disconnected');
         return;
       }
-      
+
       const j = await res.json();
       if (!j.success) {
         log(`× Error: ${j.error}`);
@@ -405,8 +324,8 @@
         updateStatus('disconnected');
         return;
       }
-      
-      log(`→ Received WebSocket URL for ${j.character}`);
+
+      log(`→ Received WebSocket URL for ${j.character}: ${j.websocketUrl}`);
       connect(j.websocketUrl, char);
     } catch (e) {
       log(`× Fetch error: ${e.message || e}`);
@@ -418,42 +337,28 @@
 
   function stopSession() {
     log('Stopping session...');
-    
-    // Immediately stop all audio elements
     audioQueue = [];
     isPlaying = false;
-    
-    // First stop audio capture
+
     if (mediaStream) {
       mediaStream.getTracks().forEach(t => {
-        try {
-          t.stop();
-          t.enabled = false;
-        } catch (e) {
-          console.error('Track stop error:', e);
-        }
+        try { t.stop(); t.enabled = false; } catch (e) { log('Track stop error:', e); }
       });
       mediaStream = null;
+      log('MediaStream tracks stopped.');
     }
-    
-    // Close the audio context to completely stop audio processing
+
     if (audioContext) {
-      try {
-        audioContext.close();
-      } catch (e) {
-        console.error('Audio context close error:', e);
-      }
+      try { audioContext.close(); } catch (e) { log('Audio context close error:', e); }
       audioContext = null;
+      log('AudioContext closed.');
     }
-    
+
     let closeWs = true;
-    
-    // Send disconnect if websocket is connected
+
     if (ws && ws.readyState === WebSocket.OPEN && callId && sessionId) {
       try {
-        // Extract the actual ID if callId is an object
         const actualCallId = typeof callId === 'object' && callId !== null && callId.id ? callId.id : callId;
-        
         ws.send(JSON.stringify({
           type: 'call_disconnect',
           session_id: sessionId,
@@ -461,8 +366,6 @@
           request_id: genRequestId(),
           content: { reason: 'user_request' }
         }));
-        
-        // Force close connection after a short timeout
         closeWs = false;
         setTimeout(() => {
           if (ws) {
@@ -471,20 +374,21 @@
           }
           sessionId = null;
           callId = null;
+          log('WebSocket closed after disconnect.');
         }, 100);
       } catch (err) {
-        console.error('Error sending disconnect:', err);
+        log('Error sending disconnect:', err);
       }
     }
-    
-    // Close websocket immediately if we didn't send a message
+
     if (closeWs && ws) {
       try { ws.close(); } catch (e) {}
       ws = null;
       sessionId = null;
       callId = null;
+      log('WebSocket closed immediately.');
     }
-    
+
     startBtn.disabled = false;
     stopBtn.disabled = true;
     updateStatus('disconnected');
@@ -496,12 +400,10 @@
       log('Error: WebSockets not supported in this browser');
       startBtn.disabled = true;
     }
-    
     if (!window.AudioContext && !window.webkitAudioContext) {
       log('Error: Web Audio API not supported in this browser');
       startBtn.disabled = true;
     }
-    
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       log('Error: getUserMedia not supported in this browser');
       startBtn.disabled = true;
@@ -512,6 +414,5 @@
   stopBtn.onclick = stopSession;
   updateStatus('disconnected');
   </script>
-
 </body>
 </html>
