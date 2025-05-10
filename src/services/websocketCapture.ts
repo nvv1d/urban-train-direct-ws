@@ -11,6 +11,17 @@ interface CaptureOptions {
 const FIREBASE_AUTH_BASE_URL = "https://identitytoolkit.googleapis.com/v1/accounts";
 const FIREBASE_TOKEN_URL = "https://securetoken.googleapis.com/v1/token";
 
+// Base64 encoding compatible with browsers and Node.js
+function toBase64(str: string): string {
+  if (typeof window !== 'undefined' && typeof window.btoa === 'function') {
+    return window.btoa(unescape(encodeURIComponent(str)));
+  } else if (typeof Buffer !== "undefined") {
+    return Buffer.from(str, 'utf-8').toString('base64');
+  } else {
+    throw new Error('No base64 encoding available');
+  }
+}
+
 function getFirebaseClientHeader(): string {
   const today = new Date().toISOString().split('T')[0];
   const xFirebaseClient = {
@@ -23,7 +34,7 @@ function getFirebaseClientHeader(): string {
     ]
   };
   const xFirebaseClientJson = JSON.stringify(xFirebaseClient);
-  return Buffer.from(xFirebaseClientJson).toString('base64');
+  return toBase64(xFirebaseClientJson);
 }
 
 function getHeaders(_requestType: string): Record<string, string> {
@@ -75,7 +86,7 @@ export async function createAnonymousAccount(): Promise<{ idToken: string, refre
 export async function captureVoiceStream(options: CaptureOptions) {
   try {
     const sessionId = uuidv4();
-    // No-op in this minimal version
+    // Your voice stream logic here
   } catch (err: any) {
     throw err;
   }
