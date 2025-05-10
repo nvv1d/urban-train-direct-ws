@@ -12,6 +12,87 @@
     @media (max-width: 600px) {
       button, #characterSelect, #micSelect { margin: 5px 0; width: 100%; }
     }
+
+    .bg-mayaBase {
+        background-color: rgb(var(--color-maya-base))
+    }
+    .bg-milesBase {
+        background-color: rgb(var(--color-miles-base))
+    }
+    .bg-green2 {
+        background-color: rgb(var(--color-green-2))
+    } /* Used for call/start call buttons */
+    .bg-rose-500 {
+        --tw-bg-opacity: 1;
+        background-color: rgb(244 63 94/var(--tw-bg-opacity,1))
+    } /* Used for stop/end call button */
+    .text-callbutton {
+        font-size: .95rem;
+        font-weight: 502;
+        line-height: 135%;
+        letter-spacing: .035em
+    }
+    @media (min-width: 768px) {
+        .text-callbutton {
+            font-size:1rem
+        }
+    }
+    .p-[var(--s12px)] {
+        padding: var(--s12px)
+    }
+    .rounded-full {
+        border-radius: 9999px
+    }
+    .rounded-radius2 {
+        border-radius: var(--radius-2)
+    }
+    .text-button {
+        font-size: .93rem;
+        font-weight: 530;
+        line-height: 120%;
+        letter-spacing: .035em
+    }
+    @media (min-width: 768px) {
+        .text-button {
+            font-size:1rem;
+            font-weight: 566;
+            letter-spacing: .02
+        }
+    }
+    .font-semibold {
+        font-weight: 600
+    }
+    .hover\:bg-green3:hover {
+        background-color: rgb(var(--color-green-3))
+    }
+    .transition-colors {
+        transition-property: color,background-color,border-color,text-decoration-color,fill,stroke;
+        transition-timing-function: cubic-bezier(.4,0,.2,1);
+        transition-duration: .15s
+    }
+    .shadow-subtle {
+        --tw-shadow: 0px 2px 15px 0px rgba(159,159,159,0.15);
+        --tw-shadow-colored: 0px 2px 15px 0px var(--tw-shadow-color);
+        box-shadow: var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)
+    }
+    .hover\:font-\[630\]:hover {
+        font-weight: 630
+    }
+    .flex {
+        display: flex
+    }
+    .flex-row {
+        flex-direction: row
+    }
+    .gap-[var(--s10)] {
+        gap: var(--s10)
+    }
+    .items-center {
+        align-items: center
+    }
+    .ml-[var(--s32)] {
+        margin-left: var(--s32)
+    }
   </style>
 </head>
 <body>
