@@ -11,7 +11,7 @@
     button:disabled { background: #bbb; }
     .controls { margin: 20px 0; }
     @media (max-width: 600px) {
-      button, #characterSelect { margin: 5px 0; width: 100%; }
+      button, #characterSelect, #micSelect { margin: 5px 0; width: 100%; }
     }
   </style>
 </head>
@@ -24,6 +24,7 @@
       <option value="Maya">Maya</option>
       <option value="Miles">Miles</option>
     </select>
+    <select id="micSelect"></select>
     <button id="startBtn">Start Session</button>
     <button id="stopBtn" disabled>Stop Session</button>
   </div>
@@ -33,35 +34,23 @@
   <script>
   'use strict';
 
-  // Debug mode toggling
   const DEBUG_MODE = true;
-
-  const SAMPLE_RATE       = 16000;
-  const AUDIO_CODEC       = 'none';
-  const CLIENT_NAME       = 'RP-Web';
-  const TIMEZONE          = 'America/Chicago';
+  const SAMPLE_RATE = 16000;
+  const AUDIO_CODEC = 'none';
+  const CLIENT_NAME = 'RP-Web';
+  const TIMEZONE = 'America/Chicago';
 
   let ws, sessionId, callId = null;
   let mediaStream, audioContext;
   let audioQueue = [], isPlaying = false;
-  let serverSampleRate = 24000;  // Default, will be updated from server
+  let serverSampleRate = 24000;
 
   const statusEl = document.getElementById('status');
   const logEl    = document.getElementById('log');
   const startBtn = document.getElementById('startBtn');
   const stopBtn  = document.getElementById('stopBtn');
   const charSel  = document.getElementById('characterSelect');
-
-  // Helper function to safely get a string ID and truncate it
-  function safeGetId(id, length = 8) {
-    if (!id) return 'undefined';
-    if (typeof id === 'object' && id !== null) {
-      if (id.id && typeof id.id === 'string') return id.id.substring(0, length) + '...';
-      return 'object';
-    }
-    if (typeof id === 'string') return id.substring(0, length) + '...';
-    return String(id).substring(0, length) + '...';
-  }
+  const micSel   = document.getElementById('micSelect');
 
   function log(msg, obj = null) {
     if (!DEBUG_MODE && /debug/i.test(msg)) return;
@@ -107,7 +96,7 @@
       return new Promise(res => { src.onended = res; src.start(); });
     } catch (e) {
       log('Audio processing error:', e);
-      return Promise.resolve(); // Continue even if there's an error
+      return Promise.resolve();
     }
   }
 
@@ -124,6 +113,33 @@
       });
   }
 
+  function populateMicList() {
+    micSel.innerHTML = '';
+    navigator.mediaDevices.enumerateDevices()
+      .then(devices => {
+        const mics = devices.filter(d => d.kind === 'audioinput');
+        if (mics.length === 0) {
+          const option = document.createElement('option');
+          option.value = '';
+          option.text = 'No microphones found';
+          micSel.appendChild(option);
+          micSel.disabled = true;
+        } else {
+          mics.forEach((device, i) => {
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.text = device.label || `Microphone ${i+1}`;
+            micSel.appendChild(option);
+          });
+          micSel.disabled = false;
+        }
+      })
+      .catch(e => {
+        log('Error enumerating devices:', e);
+        micSel.disabled = true;
+      });
+  }
+
   function startMic() {
     log('Attempting to start microphone...');
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -133,8 +149,10 @@
       return;
     }
 
+    const selectedMic = micSel.value;
     navigator.mediaDevices.getUserMedia({
       audio: {
+        deviceId: selectedMic ? { exact: selectedMic } : undefined,
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
@@ -149,7 +167,6 @@
 
       src.connect(proc);
 
-      // Muted gain node to prevent echo
       const gainNode = audioContext.createGain();
       gainNode.gain.value = 0;
       proc.connect(gainNode);
@@ -221,7 +238,7 @@
           const msg = JSON.parse(ev.data);
           if (msg.type === 'initialize') {
             sessionId = msg.content?.session_id || msg.session_id;
-            log(`→ Session initialized: ${safeGetId(sessionId)}`, msg);
+            log(`→ Session initialized: ${sessionId?.substring(0,8)}...`, msg);
 
             ws.send(JSON.stringify({
               type: 'client_location_state',
@@ -257,10 +274,7 @@
               serverSampleRate = msg.content.sample_rate;
               log(`Server sample rate set: ${serverSampleRate}`);
             }
-            log(`→ Call connected: ${safeGetId(callId)}`);
-            if (typeof callId === 'object' && callId !== null) {
-              log(`→ Call ID structure: ${JSON.stringify(callId)}`);
-            }
+            log(`→ Call connected: ${callId?.substring(0,8)}...`);
             startMic();
           }
           else if (msg.type === 'audio') {
@@ -394,7 +408,6 @@
     updateStatus('disconnected');
   }
 
-  // Check browser compatibility
   window.addEventListener('load', () => {
     if (!window.WebSocket) {
       log('Error: WebSockets not supported in this browser');
@@ -408,10 +421,12 @@
       log('Error: getUserMedia not supported in this browser');
       startBtn.disabled = true;
     }
+    populateMicList();
   });
 
   startBtn.onclick = startSession;
   stopBtn.onclick = stopSession;
+  micSel.onfocus = populateMicList; // Update list if user clicks before session
   updateStatus('disconnected');
   </script>
 </body>
