@@ -113,31 +113,41 @@
       });
   }
 
-  function populateMicList() {
+  // --- Utility for safe callId usage
+  function callIdString(ci) {
+    if (!ci) return '';
+    if (typeof ci === "string") return ci;
+    if (typeof ci === "object" && ci.id) return ci.id;
+    return String(ci);
+  }
+
+  // --- Improved Device Enumeration
+  async function populateMicList() {
     micSel.innerHTML = '';
-    navigator.mediaDevices.enumerateDevices()
-      .then(devices => {
-        const mics = devices.filter(d => d.kind === 'audioinput');
-        if (mics.length === 0) {
-          const option = document.createElement('option');
-          option.value = '';
-          option.text = 'No microphones found';
-          micSel.appendChild(option);
-          micSel.disabled = true;
-        } else {
-          mics.forEach((device, i) => {
-            const option = document.createElement('option');
-            option.value = device.deviceId;
-            option.text = device.label || `Microphone ${i+1}`;
-            micSel.appendChild(option);
-          });
-          micSel.disabled = false;
-        }
-      })
-      .catch(e => {
-        log('Error enumerating devices:', e);
-        micSel.disabled = true;
+    let devices = [];
+    try {
+      // Prompt for mic permission so enumerateDevices returns actual labels
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+      devices = await navigator.mediaDevices.enumerateDevices();
+    } catch (e) {
+      log('Microphone permission or device error:', e);
+    }
+    const mics = devices.filter(d => d.kind === 'audioinput');
+    if (mics.length === 0) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.text = 'No microphones found';
+      micSel.appendChild(option);
+      micSel.disabled = true;
+    } else {
+      mics.forEach((device, i) => {
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.text = device.label || `Microphone ${i+1}`;
+        micSel.appendChild(option);
       });
+      micSel.disabled = false;
+    }
   }
 
   function startMic() {
@@ -185,11 +195,10 @@
         }
         const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
         try {
-          const actualCallId = typeof callId === 'object' && callId !== null && callId.id ? callId.id : callId;
           ws.send(JSON.stringify({
             type: 'audio',
             session_id: sessionId,
-            call_id: actualCallId,
+            call_id: callIdString(callId),
             content: { audio_data: b64 }
           }));
           log('Mic audio sent over WebSocket.', {len: pcm.length, sample: pcm.slice(0,8)});
@@ -270,11 +279,12 @@
           }
           else if (msg.type === 'call_connect_response' || (msg.type === 'chat' && (msg.call_id || msg.content?.call_id))) {
             callId = msg.call_id || msg.content?.call_id;
+            // Fix: always use callIdString to avoid errors
+            log(`→ Call connected: ${callIdString(callId).substring(0,8)}...`);
             if (msg.content && msg.content.sample_rate) {
               serverSampleRate = msg.content.sample_rate;
               log(`Server sample rate set: ${serverSampleRate}`);
             }
-            log(`→ Call connected: ${callId?.substring(0,8)}...`);
             startMic();
           }
           else if (msg.type === 'audio') {
@@ -291,7 +301,7 @@
         }
       } catch (e) {
         log(`× Message processing error: ${e.message || e}`);
-        log(`→ Message data: ${ev.data.substring(0, 100)}...`);
+        log(`→ Message data: ${typeof ev.data === "string" ? ev.data.substring(0, 100) : ""}...`);
       }
     };
 
@@ -372,11 +382,10 @@
 
     if (ws && ws.readyState === WebSocket.OPEN && callId && sessionId) {
       try {
-        const actualCallId = typeof callId === 'object' && callId !== null && callId.id ? callId.id : callId;
         ws.send(JSON.stringify({
           type: 'call_disconnect',
           session_id: sessionId,
-          call_id: actualCallId,
+          call_id: callIdString(callId),
           request_id: genRequestId(),
           content: { reason: 'user_request' }
         }));
