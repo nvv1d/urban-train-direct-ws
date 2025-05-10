@@ -11,18 +11,6 @@ interface CaptureOptions {
 const FIREBASE_AUTH_BASE_URL = "https://identitytoolkit.googleapis.com/v1/accounts";
 const FIREBASE_TOKEN_URL = "https://securetoken.googleapis.com/v1/token";
 
-/**
- * Base64 encode that works in all browsers.
- */
-function toBase64(str: string): string {
-  try {
-    // btoa works for ASCII only; encodeURIComponent handles unicode.
-    return btoa(unescape(encodeURIComponent(str)));
-  } catch (e) {
-    throw new Error('Base64 encoding failed: ' + (e as Error).message);
-  }
-}
-
 function getFirebaseClientHeader(): string {
   const today = new Date().toISOString().split('T')[0];
   const xFirebaseClient = {
@@ -35,7 +23,7 @@ function getFirebaseClientHeader(): string {
     ]
   };
   const xFirebaseClientJson = JSON.stringify(xFirebaseClient);
-  return toBase64(xFirebaseClientJson);
+  return Buffer.from(xFirebaseClientJson).toString('base64');
 }
 
 function getHeaders(_requestType: string): Record<string, string> {
@@ -43,7 +31,7 @@ function getHeaders(_requestType: string): Record<string, string> {
     'accept': '*/*',
     'accept-language': 'en-US,en;q=0.9',
     'content-type': 'application/json',
-    'user-agent': navigator.userAgent || 'unknown',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
     'x-firebase-client': getFirebaseClientHeader(),
     'x-client-data': 'COKQywE=',
     'x-client-version': 'Chrome/JsCore/11.3.1/FirebaseCore-web',
@@ -65,24 +53,32 @@ export async function createAnonymousAccount(): Promise<{ idToken: string, refre
   const headers = getHeaders('signup');
   const payload = { returnSecureToken: true };
 
-  const response = await axios.post(url, payload, {
-    headers,
-    params: { key: DEFAULT_API_KEY }
-  });
+  try {
+    const response = await axios.post(url, payload, {
+      headers,
+      params: { key: DEFAULT_API_KEY }
+    });
 
-  if (response.data.error) {
-    throw new Error(`API Error: ${response.data.error.message}`);
+    if (response.data.error) {
+      throw new Error(`API Error: ${response.data.error.message}`);
+    }
+
+    return {
+      idToken: response.data.idToken,
+      refreshToken: response.data.refreshToken
+    };
+  } catch (error: any) {
+    throw error;
   }
-
-  return {
-    idToken: response.data.idToken,
-    refreshToken: response.data.refreshToken
-  };
 }
 
 export async function captureVoiceStream(options: CaptureOptions) {
-  const sessionId = uuidv4();
-  // Implementation for voice stream (if needed)
+  try {
+    const sessionId = uuidv4();
+    // No-op in this minimal version
+  } catch (err: any) {
+    throw err;
+  }
 }
 
 export async function captureWebSocketUrl(options: CaptureOptions): Promise<string | null> {
@@ -99,7 +95,6 @@ export async function captureWebSocketUrl(options: CaptureOptions): Promise<stri
     const websocketUrl = `${baseUrl}?${params.toString()}`;
     return websocketUrl;
   } catch (error: any) {
-    console.error('Failed to capture WebSocket URL:', error);
     return null;
   }
 }
