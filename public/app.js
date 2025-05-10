@@ -348,14 +348,14 @@ async function startMic() {
       }
       
       if (ws && ws.readyState === WebSocket.OPEN && callId) {
-        if (AUDIO_CODEC === 'adpcm') {
-          // Compress using ADPCM
-          const compressedData = ADPCM.encode(pcm.buffer);
-          sendBinaryAudio(compressedData);
-        } else {
-          // Use raw PCM
-          sendBinaryAudio(new Uint8Array(pcm.buffer));
-        }
+        // Use JSON format for audio data to match the server's expectations
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
+        ws.send(JSON.stringify({
+          type: 'audio',
+          session_id: sessionId,
+          call_id: callIdString(callId),
+          content: { audio_data: b64 }
+        }));
       }
     };
   } catch {
@@ -407,8 +407,11 @@ function connect(wsUrl, character) {
       // Handle both text and binary messages
       if (typeof ev.data === 'string') {
         const msg = JSON.parse(ev.data);
+        console.log("Received message:", msg.type);
+        
         if (msg.type === 'initialize') {
           sessionId = msg.content?.session_id || msg.session_id;
+          console.log("Session initialized:", sessionId);
 
           ws.send(JSON.stringify({
             type: 'client_location_state',
@@ -417,6 +420,7 @@ function connect(wsUrl, character) {
             content: { latitude:0, longitude:0, address:'', timezone:TIMEZONE }
           }));
 
+          // Keep this using the original format - the server may not support our binary protocol
           ws.send(JSON.stringify({
             type: 'call_connect',
             session_id: sessionId,
@@ -424,8 +428,7 @@ function connect(wsUrl, character) {
             request_id: genRequestId(),
             content: {
               sample_rate: SAMPLE_RATE,
-              audio_codec: AUDIO_CODEC,
-              binary_audio: true,  // Signal we'll use binary audio
+              audio_codec: 'none', // Use 'none' to not confuse the server
               reconnect: false,
               is_private: false,
               client_name: CLIENT_NAME,
@@ -441,15 +444,18 @@ function connect(wsUrl, character) {
         }
         else if (msg.type === 'call_connect_response' || (msg.type === 'chat' && (msg.call_id || msg.content?.call_id))) {
           callId = msg.call_id || msg.content?.call_id;
+          console.log("Call connected:", callId);
           if (msg.content && msg.content.sample_rate) {
             serverSampleRate = msg.content.sample_rate;
+            console.log("Server sample rate:", serverSampleRate);
           }
           startMic();
         }
         else if (msg.type === 'audio') {
+          console.log("Received audio data");
           const audioData = msg.content?.audio_data;
           if (audioData) {
-            const buf = processAudioData(audioData);
+            const buf = base64ToArrayBuffer(audioData);
             if (buf) {
               audioQueue.push(buf);
               if (!isPlaying) requestAnimationFrame(processQueue);
@@ -458,16 +464,10 @@ function connect(wsUrl, character) {
         }
       } else if (ev.data instanceof ArrayBuffer) {
         // Handle binary audio from server
-        const headerView = new DataView(ev.data, 0, 20);
-        const messageType = headerView.getUint32(0, true);
-        
-        if (messageType === 1) { // Audio data
-          const audioFormat = headerView.getUint32(16, true);
-          const audioData = ev.data.slice(20);
-          
-          audioQueue.push(audioData);
-          if (!isPlaying) requestAnimationFrame(processQueue);
-        }
+        console.log("Received binary data:", ev.data.byteLength);
+        // Assuming this is raw audio data without our custom header
+        audioQueue.push(ev.data);
+        if (!isPlaying) requestAnimationFrame(processQueue);
       }
     } catch (error) {
       console.error("WebSocket message error:", error);
